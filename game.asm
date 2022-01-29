@@ -8,6 +8,7 @@ section .data
     pointA dq 500, 500
     pointB dq 900, 800
     keyA dw 0
+    keyQ dw 0
 
 section .bss
     sb resb 4 * 1920 * 1080 ; staging buffer
@@ -34,6 +35,12 @@ _start:
     syscall
     mov [kbfd], rax
 
+; set graphics mode
+    mov rax, 16 ; sys_ioctl
+    mov rdi, 1 ; std out
+    mov rsi, 0x4B3A ; KDSETMODE
+    mov rdx, 1 ; graphics
+    syscall
 
 _mainloop:
     call readkbinput
@@ -56,7 +63,16 @@ _mainloop_notkeydown_a:
 
     call flushsb
 
-    jmp _mainloop
+    mov eax, [keyQ]
+    cmp eax, 1
+    jne _mainloop
+
+; unset graphics mode
+    mov rax, 16 ; sys_ioctl
+    mov rdi, 1 ; std out
+    mov rsi, 0x4B3A ; KDSETMODE
+    mov rdx, 0 ; text
+    syscall
 
 ; close files
     mov rax, 3; sys_close
@@ -104,9 +120,14 @@ _readkbinput_allowedvalue:
 
     cmp bx, 30 ; KEY_A
     je _readkbinput_key_a
+    cmp bx, 16 ; KEY_Q
+    je _readkbinput_key_q
     jmp _readkbinput_end
 _readkbinput_key_a:
     mov [keyA], eax
+    jmp _readkbinput_end
+_readkbinput_key_q:
+    mov [keyQ], eax
     jmp _readkbinput_end
 _readkbinput_end:
     mov rsp, rbp
@@ -255,7 +276,6 @@ _clearsb_next:
 
 flushsb:
     mov rdi, [fbfd]
-    
     mov rax, 8 ; sys_lseek
     mov rsi, 0
     mov rdx, 0
