@@ -1,17 +1,26 @@
 section .data
     fbDir db "/dev/fb0", 0
     kbDir db "/dev/input/by-id/usb-SONiX_USB_DEVICE-event-kbd", 0
+
     screenW dq 1920
     screenRowSize dq 1920 * 4
     screenH dq 1080
     fbSize dq 1920 * 1080 * 4
+
+    playerPos dq 1000, 1000
+    playerVel dq 1, 1
+
     pointA dq 500, 500
     pointB dq 900, 800
-    keyA dw 0
+
     keyQ dw 0
+    keyUp dw 0
+    keyDown dw 0
+    keyLeft dw 0
+    keyRight dw 0
 
 section .bss
-    sb resb 4 * 1920 * 1080 ; staging buffer
+    sb resb 1920 * 1080 * 4 ; staging buffer
     fbfd resb 8 ; frame buffer file descriptor
     kbfd resb 8 ; keyboard file descriptor
 
@@ -36,25 +45,53 @@ _start:
     mov [kbfd], rax
 
 ; set graphics mode
-    mov rax, 16 ; sys_ioctl
-    mov rdi, 1 ; std out
-    mov rsi, 0x4B3A ; KDSETMODE
-    mov rdx, 1 ; graphics
-    syscall
+;    mov rax, 16 ; sys_ioctl
+;    mov rdi, 1 ; std out
+;    mov rsi, 0x4B3A ; KDSETMODE
+;    mov rdx, 1 ; graphics
+;    syscall
 
 _mainloop:
     call readkbinput
 
     call clearsb
 
-    mov eax, [keyA]
+    mov eax, [keyUp]
     cmp eax, 1
-    jne _mainloop_notkeydown_a
+    jne _mainloop_notkeydown_up
+    sub qword [playerVel + 8], 1
+_mainloop_notkeydown_up:
+    mov eax, [keyDown]
+    cmp eax, 1
+    jne _mainloop_notkeydown_down
+    add qword [playerVel + 8], 1
+_mainloop_notkeydown_down:
+    mov eax, [keyLeft]
+    cmp eax, 1
+    jne _mainloop_notkeydown_left
+    sub qword [playerVel], 1
+_mainloop_notkeydown_left:
+    mov eax, [keyRight]
+    cmp eax, 1
+    jne _mainloop_notkeydown_right
+    add qword [playerVel], 1
+_mainloop_notkeydown_right:
 
-    mov rax, [pointA]
-    add rax, 1
-    mov [pointA], rax
-_mainloop_notkeydown_a:
+    mov rax, [playerPos]
+    mov rbx, [playerVel]
+    add rax, rbx
+    mov [playerPos], rax
+    mov rax, [playerPos + 8]
+    mov rbx, [playerVel + 8]
+    add rax, rbx
+    mov [playerPos + 8], rax
+
+    ; player world to screen
+    push playerPos
+    push pointA
+    call worldtoscreenpos
+    pop rax
+    pop rax
 
     mov rax, pointA
     mov rbx, pointB
@@ -118,13 +155,28 @@ _readkbinput_allowedvalue:
     ; eax is key up or down
     ; bx is key code
 
-    cmp bx, 30 ; KEY_A
-    je _readkbinput_key_a
+    cmp bx, 103 ; KEY_UP
+    je _readkbinput_key_up
+    cmp bx, 108 ; KEY_DOWN
+    je _readkbinput_key_down
+    cmp bx, 105 ; KEY_LEFT
+    je _readkbinput_key_left
+    cmp bx, 106 ; KEY_RIGHT
+    je _readkbinput_key_right
     cmp bx, 16 ; KEY_Q
     je _readkbinput_key_q
     jmp _readkbinput_end
-_readkbinput_key_a:
-    mov [keyA], eax
+_readkbinput_key_up:
+    mov [keyUp], eax
+    jmp _readkbinput_end
+_readkbinput_key_down:
+    mov [keyDown], eax
+    jmp _readkbinput_end
+_readkbinput_key_left:
+    mov [keyLeft], eax
+    jmp _readkbinput_end
+_readkbinput_key_right:
+    mov [keyRight], eax
     jmp _readkbinput_end
 _readkbinput_key_q:
     mov [keyQ], eax
@@ -134,6 +186,27 @@ _readkbinput_end:
     pop rbp
     ret
 
+; input: top 4bytes stack [rsp + 8] : output pos pointer
+; input: next 4bytes stack [rsp + 16] : input pos pointer
+worldtoscreenpos:
+    mov rbx, [rsp + 16] ; input pos pointer
+    mov rax, [rbx] ; x in
+    mov rcx, 100
+    cqo
+    idiv rcx
+    mov rbx, [rsp + 8] ; output pos pointer
+    mov [rbx], rax ; x out
+
+    mov rbx, [rsp + 16] ; input pos pointer
+    mov rax, [rbx + 8] ; y in
+    mov rcx, 100
+    cqo
+    idiv rcx
+    mov rbx, [rsp + 8] ; output pos pointer
+    mov [rbx + 8], rax ; y out
+
+    ret
+
 ; input: rax : pointer to point 1 {x1, y1} each 64 bit number
 ; input: rbx : pointer to point 2 {x2, y2} each 64 bit number
 ; input: ecx : color
@@ -141,7 +214,7 @@ drawline:
     push rbp
     mov rbp, rsp
 
-    sub rsp, 52
+    sub rsp, 60
     ; [rbp - 8] 8byte : target px
     ; [rbp - 16] 8byte : x inc
     ; [rbp - 24] 8byte : x diff
@@ -149,12 +222,16 @@ drawline:
     ; [rbp - 40] 8byte : y diff
     ; [rbp - 48] 8byte : x diff * 2
     ; [rbp - 52] 4byte : col
+    ; [rbp - 60] 8byte : x coord
 
     mov [rbp - 52], ecx
 
+    mov rcx, [rax] ; x1
+    mov [rbp - 60], rcx ; x coord
+
 ; FIND DIFFS
-    mov rcx, [rbx] ; x1
-    cmp rcx, [rax] ; x2
+    mov rcx, [rbx] ; x2
+    cmp rcx, [rax] ; x1
     jge _drawline_x2larger
 ; x1 larger
     mov qword [rbp - 16], -1 ; x inc
@@ -169,8 +246,8 @@ _drawline_finishxcheck:
     add rcx, 1
     mov [rbp - 24], rcx ; xdiff = rcx
 
-    mov rcx, [rbx + 8] ; y1
-    cmp rcx, [rax + 8] ; y2
+    mov rcx, [rbx + 8] ; y2
+    cmp rcx, [rax + 8] ; y1
     jge _drawline_y2larger
 ; y1 larger
     mov qword [rbp - 32], -1 ; y inc
@@ -214,14 +291,14 @@ _drawline_finishycheck:
     mov rbx, 0 ; rbx is i
     mov edx, [rbp - 52] ; edx is color
 _drawline_next:
-    mov [sb + rcx], edx ; draw
+    call _drawline_drawpx
     add rbx, [rbp - 40] ; i += ydiff
 _drawline_yfaraboverepeat:
     cmp rbx, [rbp - 48] ; xdiff * 2
     jl _drawline_ynotfarabove ; i < xdiff*2
     sub rbx, [rbp - 24] ; i -= xdiff
     call _drawline_incy
-    mov [sb + rcx], edx ; draw
+    call _drawline_drawpx
     cmp rcx, [rbp - 8]
     je _drawline_endline ; currentpx == targetpx
     jmp _drawline_yfaraboverepeat
@@ -239,15 +316,31 @@ _drawline_endline:
     pop rbp
     ret
 
+_drawline_drawpx:
+    cmp rcx, 0
+    jl _drawline_drawpx_nodraw
+    cmp rcx, [fbSize]
+    jge _drawline_drawpx_nodraw
+    mov rax, [rbp - 60] ; xcoord
+    cmp rax, 0
+    jl _drawline_drawpx_nodraw
+    cmp rax, [screenW]
+    jge _drawline_drawpx_nodraw
+    mov [sb + rcx], edx ; draw
+_drawline_drawpx_nodraw:
+    ret
+
 _drawline_incx:
     push rax
     mov rax, [rbp - 16] ; x inc
     cmp rax, 1
     je _drawline_incx_add
     sub rcx, 4 ; x -= 1
+    sub qword [rbp - 60], 1 ; xcoord -= 1
     jmp _drawline_incx_end
 _drawline_incx_add:
     add rcx, 4 ; x += 1
+    add qword [rbp - 60], 1 ; xcoord -= 1
 _drawline_incx_end:
     pop rax
     ret
