@@ -7,11 +7,18 @@ section .data
     screenH dq 1080
     fbSize dq 1920 * 1080 * 4
 
-    playerPos dq 1000, 1000
-    playerVel dq 1, 1
+    ballPos dq 50000, 500000
+    ballVel dq -1, -1
+
+    paddlePos dq 50, 50000
+
+    pointBuf1 dq 50, 1000
+    pointBuf2 dq 50, 1000
 
     pointA dq 500, 500
     pointB dq 900, 800
+
+    vec2Buffer dq 0,0
 
     keyQ dw 0
     keyUp dw 0
@@ -59,43 +66,72 @@ _mainloop:
     mov eax, [keyUp]
     cmp eax, 1
     jne _mainloop_notkeydown_up
-    sub qword [playerVel + 8], 1
+    sub qword [paddlePos + 8], 50
 _mainloop_notkeydown_up:
     mov eax, [keyDown]
     cmp eax, 1
     jne _mainloop_notkeydown_down
-    add qword [playerVel + 8], 1
+    add qword [paddlePos + 8], 50
 _mainloop_notkeydown_down:
     mov eax, [keyLeft]
     cmp eax, 1
     jne _mainloop_notkeydown_left
-    sub qword [playerVel], 1
+    sub qword [ballVel], 1
 _mainloop_notkeydown_left:
     mov eax, [keyRight]
     cmp eax, 1
     jne _mainloop_notkeydown_right
-    add qword [playerVel], 1
+    add qword [ballVel], 1
 _mainloop_notkeydown_right:
 
-    mov rax, [playerPos]
-    mov rbx, [playerVel]
+    mov rax, [ballPos]
+    mov rbx, [ballVel]
     add rax, rbx
-    mov [playerPos], rax
-    mov rax, [playerPos + 8]
-    mov rbx, [playerVel + 8]
+    mov [ballPos], rax
+    mov rax, [ballPos + 8]
+    mov rbx, [ballVel + 8]
     add rax, rbx
-    mov [playerPos + 8], rax
+    mov [ballPos + 8], rax
 
-    ; player world to screen
-    push playerPos
+    ; ball world to screen
+    push ballPos
     push pointA
     call worldtoscreenpos
     pop rax
     pop rax
 
+    ; draw ball
     mov rax, pointA
     mov rbx, pointB
     mov ecx, 0x00ff00ff
+    call drawline
+
+    ; draw paddle
+    mov rax, [paddlePos]
+    mov [vec2Buffer], rax
+    mov rax, [paddlePos + 8]
+    sub rax, 1000; half paddle height
+    mov [vec2Buffer + 8], rax
+    push vec2Buffer
+    push pointBuf1
+    call worldtoscreenpos
+    pop rax
+    pop rax
+
+    mov rax, [paddlePos]
+    mov [vec2Buffer], rax
+    mov rax, [paddlePos + 8]
+    add rax, 1000; half paddle height
+    mov [vec2Buffer + 8], rax
+    push vec2Buffer
+    push pointBuf2
+    call worldtoscreenpos
+    pop rax
+    pop rax
+
+    mov rax, pointBuf1
+    mov rbx, pointBuf2
+    mov ecx, 0x00ffffff
     call drawline
 
     call flushsb
@@ -191,7 +227,9 @@ _readkbinput_end:
 worldtoscreenpos:
     mov rbx, [rsp + 16] ; input pos pointer
     mov rax, [rbx] ; x in
-    mov rcx, 100
+    mov rcx, 1080
+    imul rcx
+    mov rcx, 100000 ; screen is 100000 world coordinates tall
     cqo
     idiv rcx
     mov rbx, [rsp + 8] ; output pos pointer
@@ -199,7 +237,9 @@ worldtoscreenpos:
 
     mov rbx, [rsp + 16] ; input pos pointer
     mov rax, [rbx + 8] ; y in
-    mov rcx, 100
+    mov rcx, 1080
+    imul rcx
+    mov rcx, 100000
     cqo
     idiv rcx
     mov rbx, [rsp + 8] ; output pos pointer
