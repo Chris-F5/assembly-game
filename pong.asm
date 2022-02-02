@@ -193,6 +193,7 @@ _mainloop_ballWallCollisionEnd:
 
     call _drawBall
     call _drawPaddles
+    call _drawBorders
 
     call _flushStagingBuffer
 
@@ -333,6 +334,52 @@ _readKeyboardInput_end:
     ret
 
 ; ===RENDERING===
+
+_drawBorders:
+    mov qword [pointA], 0
+    mov qword [pointA + 8], 0
+
+    mov qword [pointB], 0
+    mov rax, [screenH]
+    mov [pointB + 8], rax
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, SIDES_COLOR
+    call _drawLine
+
+    mov rax, [screenW]
+    sub rax, 1
+    add [pointA], rax
+    add [pointB], rax
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, SIDES_COLOR
+    call _drawLine
+
+    mov qword [pointA], 0
+    mov qword [pointA], 0
+    mov rax, [screenW]
+    mov [pointB], rax
+    mov qword [pointB + 8], 0
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, TOPBOTTOM_COLOR
+    call _drawLine
+
+    mov rax, [screenH]
+    sub rax, 1
+    add [pointA + 8], rax
+    add [pointB + 8], rax
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, TOPBOTTOM_COLOR
+    call _drawLine
+
+    ret
 
 _drawPaddles:
 ; left paddle
