@@ -169,6 +169,7 @@ _mainloop_swapBallXDir:
     mov rbx, [ballVel]
     sub rax, rbx
     mov [ballVel], rax
+    call _randomizeBallYVel
 _mainloop_ballPaddleCollisionEnd:
 
     call _drawBall
@@ -199,6 +200,25 @@ _mainloop_ballPaddleCollisionEnd:
     mov rax, SYS_EXIT
     mov rdi, 0 ; exit code
     syscall
+
+_randomizeBallYVel:
+; generate random 4 bit number
+    mov rax, [ballPos]
+    mov rbx, 3
+    mul rbx
+    and rax, 0xf
+    add rax, [leftPaddleY]
+    sub rax, [rightPaddleY]
+    add rax, [ballPos + 8]
+    add al, [leftPaddleUpKey]
+    add al, [leftPaddleDownKey]
+    and rax, 0xf
+; get vel
+    mov rbx, 8
+    mul rbx
+    mov rax, [randBallYVel + rax]
+    mov [ballVel + 8], rax
+    ret
 
 ; input: rax : pointer to input world pos {x1, y1} each 64 bit number
 ; output: rbx : pointer to output screen pos {x1, y1} each 64 bit number
