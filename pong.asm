@@ -90,7 +90,7 @@ _start:
 ; set ballVel
     mov qword [ballVel], -200
     mov qword [ballVel + 8], -10
-; set ballPos
+; set ballPos to middle of screen
     mov rax, [worldW]
     mov rbx, 2
     cqo
@@ -130,6 +130,46 @@ _mainloop_notkeypress_rightpaddle_down:
     add [ballPos], rax
     mov rax, [ballVel + 8]
     add [ballPos + 8], rax
+
+; ball paddle collision
+    cmp qword [ballVel], 0
+    jge _mainloop_ballPositiveXVel
+    cmp qword [ballPos], PADDLE_X + BALL_RADIUS
+    jg _mainloop_ballPaddleCollisionEnd
+    cmp qword [ballPos], PADDLE_X
+    jl _mainloop_ballPaddleCollisionEnd
+    mov rax, [leftPaddleY]
+    add rax, [paddleHalfSize]
+    cmp [ballPos + 8], rax
+    jg _mainloop_ballPaddleCollisionEnd
+    mov rax, [leftPaddleY]
+    sub rax, [paddleHalfSize]
+    cmp [ballPos + 8], rax
+    jl _mainloop_ballPaddleCollisionEnd
+    jmp _mainloop_swapBallXDir
+_mainloop_ballPositiveXVel:
+    mov rax, [worldW]
+    sub rax, PADDLE_X + BALL_RADIUS
+    cmp [ballPos], rax
+    jl _mainloop_ballPaddleCollisionEnd
+    mov rax, [worldW]
+    sub rax, PADDLE_X
+    cmp [ballPos], rax
+    jg _mainloop_ballPaddleCollisionEnd
+    mov rax, [rightPaddleY]
+    add rax, [paddleHalfSize]
+    cmp [ballPos + 8], rax
+    jg _mainloop_ballPaddleCollisionEnd
+    mov rax, [rightPaddleY]
+    sub rax, [paddleHalfSize]
+    cmp [ballPos + 8], rax
+    jl _mainloop_ballPaddleCollisionEnd
+_mainloop_swapBallXDir:
+    mov rax, 0
+    mov rbx, [ballVel]
+    sub rax, rbx
+    mov [ballVel], rax
+_mainloop_ballPaddleCollisionEnd:
 
     call _drawBall
     call _drawPaddles
