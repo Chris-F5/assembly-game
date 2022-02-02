@@ -1,166 +1,174 @@
+%include "config.asm"
+
+STDOUT equ 1
+
+SYS_READ equ 0
+SYS_WRITE equ 1
+SYS_OPEN equ 2
+SYS_CLOSE equ 3
+SYS_LSEEK equ 8
+SYS_IOCTL equ 16
+SYS_EXIT equ 60
+
+KDSETMODE equ 0x4B3A
+
+PADDLE_X equ 2000
+
 section .data
-    fbDir db "/dev/fb0", 0
-    kbDir db "/dev/input/by-id/usb-SONiX_USB_DEVICE-event-kbd", 0
+    fbDir db FRAMEBUFFER, 0
+    kbDir db KEYBOARD_DEVICE, 0
 
     screenW dq 1920
     screenRowSize dq 1920 * 4
     screenH dq 1080
-    fbSize dq 1920 * 1080 * 4
+    screenSize dq 1920 * 1080 * 4
 
-    ballPos dq 50000, 500000
-    ballVel dq -1, -1
+    paddleY dq 50000
 
-    paddlePos dq 50, 50000
+    pointA dq 100, 200
+    pointB dq 500, 700
 
-    pointBuf1 dq 50, 1000
-    pointBuf2 dq 50, 1000
+    worldH dq 100000
+    worldW dq 0 ; set at runtime
 
-    pointA dq 500, 500
-    pointB dq 900, 800
-
-    vec2Buffer dq 0,0
-
-    keyQ dw 0
-    keyUp dw 0
-    keyDown dw 0
-    keyLeft dw 0
-    keyRight dw 0
+    paddleHalfSize dq 5000
 
 section .bss
-    sb resb 1920 * 1080 * 4 ; staging buffer
-    fbfd resb 8 ; frame buffer file descriptor
-    kbfd resb 8 ; keyboard file descriptor
+    stagingBuffer resb 1920 * 1080 * 4
+    frameBufFile resb 8
+    keyboardFile resb 8
+
+    upKey resb 1
+    downKey resb 1
+    exit resb 1
 
 section .text
     global _start
 
 _start:
 ; open framebuffer
-    mov rax, 2; sys_open
+    mov rax, SYS_OPEN
     mov rdi, fbDir
-    mov rsi, 64+1; O_CREAT+O_WRONLY
+    mov rsi, 1 ; O_WRONLY
     mov rdx, 0644o
     syscall
-    mov [fbfd], rax
+    mov [frameBufFile], rax
 
 ; open keyboard
-    mov rax, 2 ; sys_open
+    mov rax, SYS_OPEN
     mov rdi, kbDir
     mov rsi, 4000 ; O_RDONLY | O_NOBLOCK
     mov rdx, 0644o 
     syscall
-    mov [kbfd], rax
+    mov [keyboardFile], rax
 
 ; set graphics mode
-;    mov rax, 16 ; sys_ioctl
-;    mov rdi, 1 ; std out
-;    mov rsi, 0x4B3A ; KDSETMODE
-;    mov rdx, 1 ; graphics
+;    mov rax, SYS_IOCTL 
+;    mov rdi, STDOUT
+;    mov rsi, KDSETMODE
+;    mov rdx, 1 ; graphics mode
 ;    syscall
 
+; set worldW
+    mov rax, [worldH]
+    mov rbx, [screenW]
+    mul rbx
+    mov rbx, [screenH]
+    cqo
+    div rbx
+    mov [worldW], rax
+
 _mainloop:
-    call readkbinput
+    call _readKeyboardInput
 
-    call clearsb
+    call _clearStagingBuffer
 
-    mov eax, [keyUp]
-    cmp eax, 1
-    jne _mainloop_notkeydown_up
-    sub qword [paddlePos + 8], 50
-_mainloop_notkeydown_up:
-    mov eax, [keyDown]
-    cmp eax, 1
-    jne _mainloop_notkeydown_down
-    add qword [paddlePos + 8], 50
-_mainloop_notkeydown_down:
-    mov eax, [keyLeft]
-    cmp eax, 1
-    jne _mainloop_notkeydown_left
-    sub qword [ballVel], 1
-_mainloop_notkeydown_left:
-    mov eax, [keyRight]
-    cmp eax, 1
-    jne _mainloop_notkeydown_right
-    add qword [ballVel], 1
-_mainloop_notkeydown_right:
+; handle input
+    cmp byte [upKey], 1
+    jne _mainloop_notkeypress_up
+    sub qword [paddleY], PADDLE_SPEED
+_mainloop_notkeypress_up:
+    cmp byte [downKey], 1
+    jne _mainloop_notkeypress_down
+    add qword [paddleY], PADDLE_SPEED
+_mainloop_notkeypress_down:
 
-    mov rax, [ballPos]
-    mov rbx, [ballVel]
-    add rax, rbx
-    mov [ballPos], rax
-    mov rax, [ballPos + 8]
-    mov rbx, [ballVel + 8]
-    add rax, rbx
-    mov [ballPos + 8], rax
+; draw paddle
+    mov qword [pointA], PADDLE_X
+    mov rax, [paddleY]
+    sub rax, [paddleHalfSize]
+    mov [pointA + 8], rax
+    mov rax, pointA
+    mov rbx, pointA
+    call _worldToScreen
 
-    ; ball world to screen
-    push ballPos
-    push pointA
-    call worldtoscreenpos
-    pop rax
-    pop rax
+    mov qword [pointB], PADDLE_X
+    mov rax, [paddleY]
+    add rax, [paddleHalfSize]
+    mov [pointB + 8], rax
+    mov rax, pointB
+    mov rbx, pointB
+    call _worldToScreen
 
-    ; draw ball
     mov rax, pointA
     mov rbx, pointB
-    mov ecx, 0x00ff00ff
-    call drawline
+    mov rcx, 0x00ffffff
+    call _drawline
 
-    ; draw paddle
-    mov rax, [paddlePos]
-    mov [vec2Buffer], rax
-    mov rax, [paddlePos + 8]
-    sub rax, 1000; half paddle height
-    mov [vec2Buffer + 8], rax
-    push vec2Buffer
-    push pointBuf1
-    call worldtoscreenpos
-    pop rax
-    pop rax
+    call _flushStagingBuffer
 
-    mov rax, [paddlePos]
-    mov [vec2Buffer], rax
-    mov rax, [paddlePos + 8]
-    add rax, 1000; half paddle height
-    mov [vec2Buffer + 8], rax
-    push vec2Buffer
-    push pointBuf2
-    call worldtoscreenpos
-    pop rax
-    pop rax
-
-    mov rax, pointBuf1
-    mov rbx, pointBuf2
-    mov ecx, 0x00ffffff
-    call drawline
-
-    call flushsb
-
-    mov eax, [keyQ]
+    mov eax, [exit]
     cmp eax, 1
     jne _mainloop
 
 ; unset graphics mode
-    mov rax, 16 ; sys_ioctl
-    mov rdi, 1 ; std out
-    mov rsi, 0x4B3A ; KDSETMODE
-    mov rdx, 0 ; text
+    mov rax, SYS_IOCTL
+    mov rdi, STDOUT
+    mov rsi, KDSETMODE
+    mov rdx, 0 ; text mode
     syscall
 
 ; close files
-    mov rax, 3; sys_close
-    mov rdi, [fbfd]
+    mov rax, SYS_CLOSE
+    mov rdi, [frameBufFile]
     syscall
-    mov rax, 3
-    mov rdi, [kbfd]
+    mov rax, SYS_CLOSE
+    mov rdi, [keyboardFile]
     syscall
 
 ; exit
-    mov rax, 60
-    mov rdi, 0
+    mov rax, SYS_EXIT
+    mov rdi, 0 ; exit code
     syscall
 
-readkbinput:
+; input: rax : pointer to input world pos {x1, y1} each 64 bit number
+; output: rbx : pointer to output screen pos {x1, y1} each 64 bit number
+_worldToScreen:
+    push rax
+
+    mov rax, [rax] ; x in
+    mov rcx, [screenH]
+    imul rcx ; x *= screenH
+    mov rcx, [worldH]
+    cqo
+    idiv rcx ; x /= worldH
+    mov [rbx], rax ; x out
+
+    pop rax
+
+    mov rax, [rax + 8] ; y in
+    mov rcx, [screenH]
+    imul rcx ; y *= screenH
+    mov rcx, [worldH]
+    cqo
+    idiv rcx ; y /= worldH
+    mov [rbx + 8], rax ; y out
+
+    ret
+    
+; ===USER INPUT===
+
+_readKeyboardInput:
     push rbp
     mov rbp, rsp
 
@@ -171,86 +179,57 @@ readkbinput:
     ; [rbp - 24] 16byte time info
     ; see "/usr/include/linux/input-event-codes.h"
 
-    mov rax, 0 ; sys_read
-    mov rdi, [kbfd]
+    mov rax, SYS_READ
+    mov rdi, [keyboardFile]
     mov rsi, rsp ; buffer
     mov rdx, 24 ; read size
     syscall
 
     cmp rax, 24
-    jne _readkbinput_end ; if no events end
+    jne _readKeyboardInput_end ; if no events end
 
     mov eax, [rbp - 4] ; key value
     cmp eax, 1 ; keypress
-    je _readkbinput_allowedvalue
+    je _readKeyboardInput_allowedvalue
     cmp eax, 0 ; keyrelease
-    je _readkbinput_allowedvalue
-    jmp _readkbinput_end
-_readkbinput_allowedvalue:
+    je _readKeyboardInput_allowedvalue
+    jmp _readKeyboardInput_end
+_readKeyboardInput_allowedvalue:
     mov bx, [rbp - 6] ; key code
-    ; eax is key up or down
+    ; al is key up or down
     ; bx is key code
 
-    cmp bx, 103 ; KEY_UP
-    je _readkbinput_key_up
-    cmp bx, 108 ; KEY_DOWN
-    je _readkbinput_key_down
-    cmp bx, 105 ; KEY_LEFT
-    je _readkbinput_key_left
-    cmp bx, 106 ; KEY_RIGHT
-    je _readkbinput_key_right
-    cmp bx, 16 ; KEY_Q
-    je _readkbinput_key_q
-    jmp _readkbinput_end
-_readkbinput_key_up:
-    mov [keyUp], eax
-    jmp _readkbinput_end
-_readkbinput_key_down:
-    mov [keyDown], eax
-    jmp _readkbinput_end
-_readkbinput_key_left:
-    mov [keyLeft], eax
-    jmp _readkbinput_end
-_readkbinput_key_right:
-    mov [keyRight], eax
-    jmp _readkbinput_end
-_readkbinput_key_q:
-    mov [keyQ], eax
-    jmp _readkbinput_end
-_readkbinput_end:
+    cmp bx, KEY_UP
+    je _readKeyboardInput_up
+    cmp bx, KEY_DOWN 
+    je _readKeyboardInput_down
+    cmp bx, EXIT_KEY_1
+    je _readKeyboardInput_exit
+    cmp bx, EXIT_KEY_2
+    je _readKeyboardInput_exit
+    cmp bx, EXIT_KEY_3
+    je _readKeyboardInput_exit
+    jmp _readKeyboardInput_end
+_readKeyboardInput_up:
+    mov [upKey], al
+    jmp _readKeyboardInput_end
+_readKeyboardInput_down:
+    mov [downKey], al
+    jmp _readKeyboardInput_end
+_readKeyboardInput_exit:
+    mov byte [exit], 1
+    jmp _readKeyboardInput_end
+_readKeyboardInput_end:
     mov rsp, rbp
     pop rbp
     ret
 
-; input: top 4bytes stack [rsp + 8] : output pos pointer
-; input: next 4bytes stack [rsp + 16] : input pos pointer
-worldtoscreenpos:
-    mov rbx, [rsp + 16] ; input pos pointer
-    mov rax, [rbx] ; x in
-    mov rcx, 1080
-    imul rcx
-    mov rcx, 100000 ; screen is 100000 world coordinates tall
-    cqo
-    idiv rcx
-    mov rbx, [rsp + 8] ; output pos pointer
-    mov [rbx], rax ; x out
-
-    mov rbx, [rsp + 16] ; input pos pointer
-    mov rax, [rbx + 8] ; y in
-    mov rcx, 1080
-    imul rcx
-    mov rcx, 100000
-    cqo
-    idiv rcx
-    mov rbx, [rsp + 8] ; output pos pointer
-    mov [rbx + 8], rax ; y out
-
-    ret
+; ===RENDERING===
 
 ; input: rax : pointer to point 1 {x1, y1} each 64 bit number
 ; input: rbx : pointer to point 2 {x2, y2} each 64 bit number
 ; input: ecx : color
-drawline:
+_drawline:
     push rbp
     mov rbp, rsp
 
@@ -265,11 +244,9 @@ drawline:
     ; [rbp - 60] 8byte : x coord
 
     mov [rbp - 52], ecx
-
     mov rcx, [rax] ; x1
     mov [rbp - 60], rcx ; x coord
-
-; FIND DIFFS
+; find diffs
     mov rcx, [rbx] ; x2
     cmp rcx, [rax] ; x1
     jge _drawline_x2larger
@@ -285,7 +262,6 @@ _drawline_x2larger:
 _drawline_finishxcheck:
     add rcx, 1
     mov [rbp - 24], rcx ; xdiff = rcx
-
     mov rcx, [rbx + 8] ; y2
     cmp rcx, [rax + 8] ; y1
     jge _drawline_y2larger
@@ -301,8 +277,7 @@ _drawline_y2larger:
 _drawline_finishycheck:
     add rcx, 1
     mov [rbp - 40], rcx ; ydiff = rcx
-
-; FIND START PIXEL
+; find start pixel
     mov rcx, [rax] ; x1
     mov rax, [rax + 8] ; y1
     mul qword [screenW]
@@ -311,22 +286,19 @@ _drawline_finishycheck:
     mul rcx
     mov rcx, rax
     ; rcx is start px
-
-; FIND END PIXEL
+; find end pixel
     mov rax, [rbx + 8] ; y2
     mul qword [screenW]
     add rax, [rbx] ; x2
     mov rbx, 4
     mul rbx
     mov [rbp - 8], rax ; targetpx
-
-; XDIFF * 2
+; xdiff * 2
     mov rax, [rbp - 24] ; xdiff
     mov rbx, 2
     mul rbx
     mov [rbp - 48], rax ; xdiff * 2
-
-; DRAW LINE
+; draw line
     ; rcx is current px
     mov rbx, 0 ; rbx is i
     mov edx, [rbp - 52] ; edx is color
@@ -359,17 +331,16 @@ _drawline_endline:
 _drawline_drawpx:
     cmp rcx, 0
     jl _drawline_drawpx_nodraw
-    cmp rcx, [fbSize]
+    cmp rcx, [screenSize]
     jge _drawline_drawpx_nodraw
     mov rax, [rbp - 60] ; xcoord
     cmp rax, 0
     jl _drawline_drawpx_nodraw
     cmp rax, [screenW]
     jge _drawline_drawpx_nodraw
-    mov [sb + rcx], edx ; draw
+    mov [stagingBuffer + rcx], edx ; draw
 _drawline_drawpx_nodraw:
     ret
-
 _drawline_incx:
     push rax
     mov rax, [rbp - 16] ; x inc
@@ -384,7 +355,6 @@ _drawline_incx_add:
 _drawline_incx_end:
     pop rax
     ret
-
 _drawline_incy:
     push rax
     mov rax, [rbp - 32] ; y inc
@@ -398,24 +368,34 @@ _drawline_incy_end:
     pop rax
     ret
 
-clearsb:
+_clearStagingBuffer:
+    push rax
+
     mov rax, 0
-_clearsb_next:
-    mov dword [sb + rax],  0
+_clearStagingBuffer_loop:
+    mov dword [stagingBuffer + rax],  0
     add rax, 4
-    cmp rax, [fbSize]
-    jne _clearsb_next
+    cmp rax, [screenSize]
+    jne _clearStagingBuffer_loop
+
+    pop rax
     ret
 
-flushsb:
-    mov rdi, [fbfd]
-    mov rax, 8 ; sys_lseek
+_flushStagingBuffer:
+    push rax
+    push rdx
+
+    mov rdi, [frameBufFile]
+    mov rax, SYS_LSEEK
     mov rsi, 0
     mov rdx, 0
     syscall
 
-    mov rax, 1 ; sys_write
-    mov rsi, sb
-    mov rdx, 4 * 1920 * 1080
+    mov rax, SYS_WRITE
+    mov rsi, stagingBuffer
+    mov rdx, [screenSize]
     syscall
+
+    pop rdx
+    pop rax
     ret

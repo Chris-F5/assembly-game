@@ -1,6 +1,6 @@
 OBJFORMAT = elf64
 
-game: game.o
+pong: pong.o
 	ld $< -o $@
 
 %.o: %.asm
@@ -8,8 +8,8 @@ game: game.o
 
 .PHONY = run clean
 
-run: game
-	./game
+run: pong
+	./pong
 
 clean:
-	rm -f game game.o
+	rm -f pong pong.o
