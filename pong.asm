@@ -72,11 +72,11 @@ _start:
     mov [keyboardFile], rax
 
 ; set graphics mode
-;    mov rax, SYS_IOCTL 
-;    mov rdi, STDOUT
-;    mov rsi, KDSETMODE
-;    mov rdx, 1 ; graphics mode
-;    syscall
+    mov rax, SYS_IOCTL 
+    mov rdi, STDOUT
+    mov rsi, KDSETMODE
+    mov rdx, 1 ; graphics mode
+    syscall
 
 ; set worldW
     mov rax, [worldH]
