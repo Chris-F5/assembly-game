@@ -172,6 +172,25 @@ _mainloop_swapBallXDir:
     call _randomizeBallYVel
 _mainloop_ballPaddleCollisionEnd:
 
+; ball wall collision
+
+    cmp qword [ballVel + 8], 0
+    jg _mainloop_ballPositiveYVel
+    cmp qword [ballPos + 8], BALL_RADIUS
+    jg _mainloop_ballWallCollisionEnd
+    jmp _mainloop_swapBallYDir
+_mainloop_ballPositiveYVel:
+    mov rax, [worldH]
+    sub rax, BALL_RADIUS
+    cmp [ballPos + 8], rax
+    jl _mainloop_ballWallCollisionEnd
+_mainloop_swapBallYDir:
+    mov rax, 0
+    mov rbx, [ballVel + 8]
+    sub rax, rbx
+    mov [ballVel + 8], rax
+_mainloop_ballWallCollisionEnd:
+
     call _drawBall
     call _drawPaddles
 
