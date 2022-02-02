@@ -13,33 +13,42 @@ SYS_EXIT equ 60
 KDSETMODE equ 0x4B3A
 
 PADDLE_X equ 2000
+BALL_RADIUS equ 1000
 
 section .data
     fbDir db FRAMEBUFFER, 0
     kbDir db KEYBOARD_DEVICE, 0
 
-    screenW dq 1920
-    screenRowSize dq 1920 * 4
-    screenH dq 1080
-    screenSize dq 1920 * 1080 * 4
+    screenW dq SCREEN_RES_X
+    screenRowSize dq SCREEN_RES_X * 4
+    screenH dq SCREEN_RES_Y
+    screenSize dq SCREEN_RES_X * SCREEN_RES_Y * 4
 
-    paddleY dq 50000
+    leftPaddleY dq 50000
+    rightPaddleY dq 50000
 
-    pointA dq 100, 200
-    pointB dq 500, 700
+    pointA dq 0, 0
+    pointB dq 0, 0
 
     worldH dq 100000
     worldW dq 0 ; set at runtime
 
+    randBallYVel dq -200, -150, -100, -60, -50, -40, -30, -15, 200, 150, 100, 60, 50, 40, 30, 15
+
     paddleHalfSize dq 5000
 
 section .bss
-    stagingBuffer resb 1920 * 1080 * 4
+    stagingBuffer resb SCREEN_RES_X * SCREEN_RES_Y * 4
     frameBufFile resb 8
     keyboardFile resb 8
 
-    upKey resb 1
-    downKey resb 1
+    ballPos resb 16
+    ballVel resb 16
+
+    leftPaddleUpKey resb 1
+    leftPaddleDownKey resb 1
+    rightPaddleUpKey resb 1
+    rightPaddleDownKey resb 1
     exit resb 1
 
 section .text
@@ -78,42 +87,52 @@ _start:
     div rbx
     mov [worldW], rax
 
+; set ballVel
+    mov qword [ballVel], -200
+    mov qword [ballVel + 8], -10
+; set ballPos
+    mov rax, [worldW]
+    mov rbx, 2
+    cqo
+    div rbx
+    mov [ballPos], rax
+    mov rax, [worldH]
+    mov rbx, 2
+    cqo
+    div rbx
+    mov [ballPos + 8], rax
+
 _mainloop:
     call _readKeyboardInput
 
     call _clearStagingBuffer
 
 ; handle input
-    cmp byte [upKey], 1
-    jne _mainloop_notkeypress_up
-    sub qword [paddleY], PADDLE_SPEED
-_mainloop_notkeypress_up:
-    cmp byte [downKey], 1
-    jne _mainloop_notkeypress_down
-    add qword [paddleY], PADDLE_SPEED
-_mainloop_notkeypress_down:
+    cmp byte [leftPaddleUpKey], 1
+    jne _mainloop_notkeypress_leftpaddle_up
+    sub qword [leftPaddleY], PADDLE_SPEED
+_mainloop_notkeypress_leftpaddle_up:
+    cmp byte [leftPaddleDownKey], 1
+    jne _mainloop_notkeypress_leftpaddle_down
+    add qword [leftPaddleY], PADDLE_SPEED
+_mainloop_notkeypress_leftpaddle_down:
+    cmp byte [rightPaddleUpKey], 1
+    jne _mainloop_notkeypress_rightpaddle_up
+    sub qword [rightPaddleY], PADDLE_SPEED
+_mainloop_notkeypress_rightpaddle_up:
+    cmp byte [rightPaddleDownKey], 1
+    jne _mainloop_notkeypress_rightpaddle_down
+    add qword [rightPaddleY], PADDLE_SPEED
+_mainloop_notkeypress_rightpaddle_down:
 
-; draw paddle
-    mov qword [pointA], PADDLE_X
-    mov rax, [paddleY]
-    sub rax, [paddleHalfSize]
-    mov [pointA + 8], rax
-    mov rax, pointA
-    mov rbx, pointA
-    call _worldToScreen
+; apply ball vel
+    mov rax, [ballVel]
+    add [ballPos], rax
+    mov rax, [ballVel + 8]
+    add [ballPos + 8], rax
 
-    mov qword [pointB], PADDLE_X
-    mov rax, [paddleY]
-    add rax, [paddleHalfSize]
-    mov [pointB + 8], rax
-    mov rax, pointB
-    mov rbx, pointB
-    call _worldToScreen
-
-    mov rax, pointA
-    mov rbx, pointB
-    mov rcx, 0x00ffffff
-    call _drawline
+    call _drawBall
+    call _drawPaddles
 
     call _flushStagingBuffer
 
@@ -199,10 +218,14 @@ _readKeyboardInput_allowedvalue:
     ; al is key up or down
     ; bx is key code
 
-    cmp bx, KEY_UP
-    je _readKeyboardInput_up
-    cmp bx, KEY_DOWN 
-    je _readKeyboardInput_down
+    cmp bx, KEY_LEFT_PADDLE_UP
+    je _readKeyboardInput_leftpaddle_up
+    cmp bx, KEY_LEFT_PADDLE_DOWN
+    je _readKeyboardInput_leftpaddle_down
+    cmp bx, KEY_RIGHT_PADDLE_UP
+    je _readKeyboardInput_rightpaddle_up
+    cmp bx, KEY_RIGHT_PADDLE_DOWN
+    je _readKeyboardInput_rightpaddle_down
     cmp bx, EXIT_KEY_1
     je _readKeyboardInput_exit
     cmp bx, EXIT_KEY_2
@@ -210,11 +233,17 @@ _readKeyboardInput_allowedvalue:
     cmp bx, EXIT_KEY_3
     je _readKeyboardInput_exit
     jmp _readKeyboardInput_end
-_readKeyboardInput_up:
-    mov [upKey], al
+_readKeyboardInput_leftpaddle_up:
+    mov [leftPaddleUpKey], al
     jmp _readKeyboardInput_end
-_readKeyboardInput_down:
-    mov [downKey], al
+_readKeyboardInput_leftpaddle_down:
+    mov [leftPaddleDownKey], al
+    jmp _readKeyboardInput_end
+_readKeyboardInput_rightpaddle_up:
+    mov [rightPaddleUpKey], al
+    jmp _readKeyboardInput_end
+_readKeyboardInput_rightpaddle_down:
+    mov [rightPaddleDownKey], al
     jmp _readKeyboardInput_end
 _readKeyboardInput_exit:
     mov byte [exit], 1
@@ -226,10 +255,131 @@ _readKeyboardInput_end:
 
 ; ===RENDERING===
 
+_drawPaddles:
+; left paddle
+    mov qword [pointA], PADDLE_X
+    mov rax, [leftPaddleY]
+    sub rax, [paddleHalfSize]
+    mov [pointA + 8], rax
+    mov rax, pointA
+    mov rbx, pointA
+    call _worldToScreen
+
+    mov qword [pointB], PADDLE_X
+    mov rax, [leftPaddleY]
+    add rax, [paddleHalfSize]
+    mov [pointB + 8], rax
+    mov rax, pointB
+    mov rbx, pointB
+    call _worldToScreen
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, PADDLE_COLOR
+    call _drawLine
+; right paddle
+    mov rax, [worldW]
+    sub rax, PADDLE_X
+    mov qword [pointA], rax
+    mov rax, [rightPaddleY]
+    sub rax, [paddleHalfSize]
+    mov [pointA + 8], rax
+    mov rax, pointA
+    mov rbx, pointA
+    call _worldToScreen
+
+    mov rax, [worldW]
+    sub rax, PADDLE_X
+    mov qword [pointB], rax
+    mov rax, [rightPaddleY]
+    add rax, [paddleHalfSize]
+    mov [pointB + 8], rax
+    mov rax, pointB
+    mov rbx, pointB
+    call _worldToScreen
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, PADDLE_COLOR
+    call _drawLine
+    ret
+
+_drawBall:
+    mov rax, [ballPos]
+    add rax, BALL_RADIUS
+    mov [pointA], rax
+    mov rax, [ballPos + 8]
+    add rax, BALL_RADIUS
+    mov [pointA + 8], rax
+    mov rax, pointA
+    mov rbx, pointA
+    call _worldToScreen
+
+    mov rax, [ballPos]
+    sub rax, BALL_RADIUS
+    mov [pointB], rax
+    mov rax, [ballPos + 8]
+    add rax, BALL_RADIUS
+    mov [pointB + 8], rax
+    mov rax, pointB
+    mov rbx, pointB
+    call _worldToScreen
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, BALL_COLOR
+    call _drawLine
+
+    mov rax, [ballPos]
+    add rax, BALL_RADIUS
+    mov [pointB], rax
+    mov rax, [ballPos + 8]
+    sub rax, BALL_RADIUS
+    mov [pointB + 8], rax
+    mov rax, pointB
+    mov rbx, pointB
+    call _worldToScreen
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, BALL_COLOR
+    call _drawLine
+
+    mov rax, [ballPos]
+    sub rax, BALL_RADIUS
+    mov [pointA], rax
+    mov rax, [ballPos + 8]
+    sub rax, BALL_RADIUS
+    mov [pointA + 8], rax
+    mov rax, pointA
+    mov rbx, pointA
+    call _worldToScreen
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, BALL_COLOR
+    call _drawLine
+
+    mov rax, [ballPos]
+    sub rax, BALL_RADIUS
+    mov [pointB], rax
+    mov rax, [ballPos + 8]
+    add rax, BALL_RADIUS
+    mov [pointB + 8], rax
+    mov rax, pointB
+    mov rbx, pointB
+    call _worldToScreen
+
+    mov rax, pointA
+    mov rbx, pointB
+    mov rcx, BALL_COLOR
+    call _drawLine
+    ret
+
 ; input: rax : pointer to point 1 {x1, y1} each 64 bit number
 ; input: rbx : pointer to point 2 {x2, y2} each 64 bit number
 ; input: ecx : color
-_drawline:
+_drawLine:
     push rbp
     mov rbp, rsp
 
@@ -249,32 +399,32 @@ _drawline:
 ; find diffs
     mov rcx, [rbx] ; x2
     cmp rcx, [rax] ; x1
-    jge _drawline_x2larger
+    jge _drawLine_x2larger
 ; x1 larger
     mov qword [rbp - 16], -1 ; x inc
     mov rcx, [rax] ; x1
     sub rcx, [rbx] ; rcx = x1 - x2
-    jmp _drawline_finishxcheck
-_drawline_x2larger:
+    jmp _drawLine_finishxcheck
+_drawLine_x2larger:
     mov qword [rbp - 16], 1 ; x inc
     mov rcx, [rbx] ; x2
     sub rcx, [rax] ; rcx = x2 - x1
-_drawline_finishxcheck:
+_drawLine_finishxcheck:
     add rcx, 1
     mov [rbp - 24], rcx ; xdiff = rcx
     mov rcx, [rbx + 8] ; y2
     cmp rcx, [rax + 8] ; y1
-    jge _drawline_y2larger
+    jge _drawLine_y2larger
 ; y1 larger
     mov qword [rbp - 32], -1 ; y inc
     mov rcx, [rax + 8] ; y1
     sub rcx, [rbx + 8] ; rcx = y1 - y2
-    jmp _drawline_finishycheck
-_drawline_y2larger:
+    jmp _drawLine_finishycheck
+_drawLine_y2larger:
     mov qword [rbp - 32], 1 ; y inc
     mov rcx, [rbx + 8] ; y2
     sub rcx, [rax + 8] ; rcx = y2 - y1
-_drawline_finishycheck:
+_drawLine_finishycheck:
     add rcx, 1
     mov [rbp - 40], rcx ; ydiff = rcx
 ; find start pixel
@@ -293,6 +443,13 @@ _drawline_finishycheck:
     mov rbx, 4
     mul rbx
     mov [rbp - 8], rax ; targetpx
+; if end pixel == start pixel
+    cmp rax, rcx
+    jne _drawLine_notEqual
+    mov edx, [rbp - 52]
+    call _drawLine_drawpx
+    jmp _drawLine_endline
+_drawLine_notEqual:
 ; xdiff * 2
     mov rax, [rbp - 24] ; xdiff
     mov rbx, 2
@@ -302,69 +459,69 @@ _drawline_finishycheck:
     ; rcx is current px
     mov rbx, 0 ; rbx is i
     mov edx, [rbp - 52] ; edx is color
-_drawline_next:
-    call _drawline_drawpx
+_drawLine_next:
+    call _drawLine_drawpx
     add rbx, [rbp - 40] ; i += ydiff
-_drawline_yfaraboverepeat:
+_drawLine_yfaraboverepeat:
     cmp rbx, [rbp - 48] ; xdiff * 2
-    jl _drawline_ynotfarabove ; i < xdiff*2
+    jl _drawLine_ynotfarabove ; i < xdiff*2
     sub rbx, [rbp - 24] ; i -= xdiff
-    call _drawline_incy
-    call _drawline_drawpx
+    call _drawLine_incy
+    call _drawLine_drawpx
     cmp rcx, [rbp - 8]
-    je _drawline_endline ; currentpx == targetpx
-    jmp _drawline_yfaraboverepeat
-_drawline_ynotfarabove:
+    je _drawLine_endline ; currentpx == targetpx
+    jmp _drawLine_yfaraboverepeat
+_drawLine_ynotfarabove:
     cmp rbx, [rbp - 24] ; xdiff
-    jl _drawline_nextx ; i < xdiff
+    jl _drawLine_nextx ; i < xdiff
     sub rbx, [rbp - 24] ; i -= xdiff
-    call _drawline_incy
-_drawline_nextx:
-    call _drawline_incx
+    call _drawLine_incy
+_drawLine_nextx:
+    call _drawLine_incx
     cmp rcx, [rbp - 8]
-    jne _drawline_next ; currentpx != targetpx
-_drawline_endline:
+    jne _drawLine_next ; currentpx != targetpx
+_drawLine_endline:
     mov rsp, rbp
     pop rbp
     ret
 
-_drawline_drawpx:
+_drawLine_drawpx:
     cmp rcx, 0
-    jl _drawline_drawpx_nodraw
+    jl _drawLine_drawpx_nodraw
     cmp rcx, [screenSize]
-    jge _drawline_drawpx_nodraw
+    jge _drawLine_drawpx_nodraw
     mov rax, [rbp - 60] ; xcoord
     cmp rax, 0
-    jl _drawline_drawpx_nodraw
+    jl _drawLine_drawpx_nodraw
     cmp rax, [screenW]
-    jge _drawline_drawpx_nodraw
+    jge _drawLine_drawpx_nodraw
     mov [stagingBuffer + rcx], edx ; draw
-_drawline_drawpx_nodraw:
+_drawLine_drawpx_nodraw:
     ret
-_drawline_incx:
+_drawLine_incx:
     push rax
     mov rax, [rbp - 16] ; x inc
     cmp rax, 1
-    je _drawline_incx_add
+    je _drawLine_incx_add
     sub rcx, 4 ; x -= 1
     sub qword [rbp - 60], 1 ; xcoord -= 1
-    jmp _drawline_incx_end
-_drawline_incx_add:
+    jmp _drawLine_incx_end
+_drawLine_incx_add:
     add rcx, 4 ; x += 1
     add qword [rbp - 60], 1 ; xcoord -= 1
-_drawline_incx_end:
+_drawLine_incx_end:
     pop rax
     ret
-_drawline_incy:
+_drawLine_incy:
     push rax
     mov rax, [rbp - 32] ; y inc
     cmp rax, 1
-    je _drawline_incy_add
+    je _drawLine_incy_add
     sub rcx, [screenRowSize] ; y -= 1
-    jmp _drawline_incy_end
-_drawline_incy_add:
+    jmp _drawLine_incy_end
+_drawLine_incy_add:
     add rcx, [screenRowSize] ; y += 1
-_drawline_incy_end:
+_drawLine_incy_end:
     pop rax
     ret
 

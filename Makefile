@@ -3,7 +3,7 @@ OBJFORMAT = elf64
 pong: pong.o
 	ld $< -o $@
 
-%.o: %.asm
+pong.o: pong.asm config.asm
 	nasm -f $(OBJFORMAT) -o $@ $<
 
 .PHONY = run clean
