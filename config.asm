@@ -1,7 +1,7 @@
 %define FRAMEBUFFER "/dev/fb0"
 %define KEYBOARD_DEVICE "/dev/input/by-id/usb-SONiX_USB_DEVICE-event-kbd"
 
-; run 'cat /sys/class/graphics/fb0/virtual_size' to check your frame buffer res
+; run 'cat /sys/class/graphics/fb0/virtual_size' to check your frame buffer size
 SCREEN_RES_X equ 1920
 SCREEN_RES_Y equ 1080
 
